@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StockBoard Pro | 실시간 주식 현황판</title>
+    <!-- React & Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- ApexCharts -->
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.05); }
+        .chart-container .apexcharts-canvas { margin: 0 auto; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // Mock Data
+        const TOP_100_STOCKS = [
+            { id: 1, name: "삼성전자", code: "005930", price: 78200, change: 1.2, cap: "466.8조", per: 15.2, pbr: 1.4, roe: 9.5 },
+            { id: 2, name: "SK하이닉스", code: "000660", price: 184500, change: -0.8, cap: "134.3조", per: 12.5, pbr: 1.8, roe: 14.2 },
+            { id: 3, name: "LG에너지솔루션", code: "373220", price: 395000, change: 2.5, cap: "92.4조", per: 45.0, pbr: 4.2, roe: 8.1 },
+            { id: 4, name: "삼성바이오로직스", code: "207940", price: 812000, change: 0.5, cap: "57.8조", per: 62.1, pbr: 5.5, roe: 11.2 },
+            { id: 5, name: "현대차", code: "005380", price: 245000, change: -1.2, cap: "52.3조", per: 5.8, pbr: 0.7, roe: 12.5 },
+            // ... truncated for demo, generating 20 more
+            ...Array.from({length: 20}, (_, i) => ({
+                id: i + 6,
+                name: `기업 ${i + 6}`,
+                code: `0000${i + 6}`,
+                price: Math.floor(Math.random() * 500000) + 10000,
+                change: (Math.random() * 10 - 5).toFixed(1),
+                cap: (Math.random() * 50 + 5).toFixed(1) + "조",
+                per: (Math.random() * 20 + 5).toFixed(1),
+                pbr: (Math.random() * 3 + 0.5).toFixed(1),
+                roe: (Math.random() * 15 + 2).toFixed(1)
+            }))
+        ];
+
+        const NEWS_DATA = [
+            { id: 1, title: "연준, 금리 동결 가능성 시사... 시장 '안도'", time: "10분 전", tag: "종합" },
+            { id: 2, title: "삼성전자, 차세대 HBM 양산 본격화 소식에 상승", time: "25분 전", tag: "국내" },
+            { id: 3, title: "엔비디아 주가 사상 최고치 경신... 시총 3조 달러 육박", time: "45분 전", tag: "해외" },
+            { id: 4, title: "K-배터리 3사, 유럽 점유율 확대 속도낸다", time: "1시간 전", tag: "산업" },
+            { id: 5, title: "유가 하락세 지속... 인플레이션 우려 완화", time: "2시간 전", tag: "경제" }
+        ];
+
+        // --- Components ---
+
+        const Icon = ({ name, size = 20, className = "" }) => {
+            useEffect(() => {
+                lucide.createIcons();
+            }, [name]);
+            return <i data-lucide={name} className={`${className}`} style={{ width: size, height: size }}></i>;
+        };
+
+        const SidebarItem = ({ icon, label, active, onClick }) => (
+            <button 
+                onClick={onClick}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${active ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}
+            >
+                <Icon name={icon} size={20} />
+                <span className="font-semibold text-sm">{label}</span>
+            </button>
+        );
+
+        const MarketIndex = ({ label, value, change, isDown }) => (
+            <div className="glass p-4 rounded-2xl flex flex-col gap-1 min-w-[140px]">
+                <span className="text-xs text-slate-400 font-medium">{label}</span>
+                <div className="flex items-baseline gap-2">
+                    <span className="text-lg font-bold tracking-tight">{value}</span>
+                    <span className={`text-[11px] font-bold ${isDown ? 'text-rose-400' : 'text-emerald-400'}`}>
+                        {isDown ? '▼' : '▲'} {change}%
+                    </span>
+                </div>
+            </div>
+        );
+
+        const StockChart = ({ symbol }) => {
+            useEffect(() => {
+                const options = {
+                    series: [{
+                        name: '주가',
+                        data: Array.from({length: 24}, () => Math.floor(Math.random() * 100) + 70000)
+                    }],
+                    chart: {
+                        type: 'area',
+                        height: 350,
+                        toolbar: { show: false },
+                        background: 'transparent',
+                        fontFamily: 'Inter, sans-serif'
+                    },
+                    colors: ['#6366f1'],
+                    fill: {
+                        type: 'gradient',
+                        gradient: {
+                            shadeIntensity: 1,
+                            opacityFrom: 0.45,
+                            opacityTo: 0.05,
+                            stops: [20, 100]
+                        }
+                    },
+                    dataLabels: { enabled: false },
+                    stroke: { curve: 'smooth', width: 3 },
+                    grid: { borderColor: '#1e293b', strokeDashArray: 4 },
+                    xaxis: {
+                        categories: Array.from({length: 24}, (_, i) => `${i}:00`),
+                        labels: { style: { colors: '#64748b' } },
+                        axisBorder: { show: false },
+                        axisTicks: { show: false }
+                    },
+                    yaxis: {
+                        labels: { style: { colors: '#64748b' } }
+                    },
+                    tooltip: { theme: 'dark' }
+                };
+
+                const chart = new ApexCharts(document.querySelector("#main-chart"), options);
+                chart.render();
+                return () => chart.destroy();
+            }, [symbol]);
+
+            return <div id="main-chart" className="w-full"></div>;
+        };
+
+        // --- Main App ---
+
+        const App = () => {
+            const [activeTab, setActiveTab] = useState('domestic');
+            const [searchQuery, setSearchQuery] = useState('');
+            const [watchlist, setWatchlist] = useState([]);
+            const [selectedStock, setSelectedStock] = useState(TOP_100_STOCKS[0]);
+
+            const filteredStocks = useMemo(() => {
+                return TOP_100_STOCKS.filter(s => 
+                    s.name.includes(searchQuery) || s.code.includes(searchQuery)
+                );
+            }, [searchQuery]);
+
+            const toggleWatchlist = (stock) => {
+                if (watchlist.find(s => s.id === stock.id)) {
+                    setWatchlist(watchlist.filter(s => s.id !== stock.id));
+                } else {
+                    setWatchlist([...watchlist, stock]);
+                }
+            };
+
+            return (
+                <div className="flex h-screen overflow-hidden">
+                    
+                    {/* Sidebar */}
+                    <aside className="w-64 glass border-r border-slate-800 flex flex-col p-6 hidden lg:flex">
+                        <div className="flex items-center gap-3 mb-10 px-2">
+                            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                                <Icon name="trending-up" className="text-white" />
+                            </div>
+                            <h1 className="text-xl font-extrabold tracking-tighter">StockBoard</h1>
+                        </div>
+
+                        <nav className="space-y-2 flex-1">
+                            <SidebarItem icon="layout-dashboard" label="국내 주식" active={activeTab === 'domestic'} onClick={() => setActiveTab('domestic')} />
+                            <SidebarItem icon="globe" label="해외 주식" active={activeTab === 'overseas'} onClick={() => setActiveTab('overseas')} />
+                            <SidebarItem icon="layers" label="ETF 전용관" active={activeTab === 'etf'} onClick={() => setActiveTab('etf')} />
+                            <SidebarItem icon="bar-chart-big" label="재무 100선" active={activeTab === 'top100'} onClick={() => setActiveTab('top100')} />
+                        </nav>
+
+                        <div className="mt-10">
+                            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4 px-2">My Watchlist</h3>
+                            <div className="space-y-3 overflow-y-auto max-h-[300px] pr-2">
+                                {watchlist.length === 0 ? (
+                                    <p className="text-xs text-slate-600 px-2">관심 종목을 추가하세요.</p>
+                                ) : (
+                                    watchlist.map(stock => (
+                                        <div key={stock.id} className="flex justify-between items-center px-2">
+                                            <span className="text-sm font-medium">{stock.name}</span>
+                                            <span className={`text-xs font-bold ${stock.change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                {stock.change > 0 ? '+' : ''}{stock.change}%
+                                            </span>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    </aside>
+
+                    {/* Main Section */}
+                    <main className="flex-1 flex flex-col overflow-hidden">
+                        
+                        {/* Header */}
+                        <header className="h-20 glass border-b border-slate-800 flex items-center justify-between px-8 shrink-0">
+                            <div className="flex items-center gap-6 flex-1">
+                                <div className="relative w-full max-w-md group">
+                                    <Icon name="search" size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-500 transition-colors" />
+                                    <input 
+                                        type="text" 
+                                        placeholder="종목명 또는 코드 검색"
+                                        className="w-full bg-slate-900 border border-slate-800 rounded-2xl py-3 pl-12 pr-4 text-sm focus:outline-none focus:border-indigo-500 transition-all"
+                                        value={searchQuery}
+                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                    />
+                                </div>
+                                <div className="flex gap-4 hidden xl:flex">
+                                    <MarketIndex label="KOSPI" value="2,723.45" change="0.45" />
+                                    <MarketIndex label="NASDAQ" value="16,428.82" change="1.12" />
+                                    <MarketIndex label="USD/KRW" value="1,365.20" change="0.21" isDown />
+                                </div>
+                            </div>
+                            
+                            <div className="flex items-center gap-4">
+                                <button className="w-10 h-10 rounded-full glass flex items-center justify-center hover:bg-slate-800 transition-colors">
+                                    <Icon name="moon" size={18} />
+                                </button>
+                                <div className="flex items-center gap-3 pl-4 border-l border-slate-800">
+                                    <div className="text-right hidden sm:block">
+                                        <p className="text-sm font-bold">투자자님</p>
+                                        <p className="text-[10px] text-slate-500">Premium Member</p>
+                                    </div>
+                                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 border-2 border-slate-800"></div>
+                                </div>
+                            </div>
+                        </header>
+
+                        {/* Content Scroll Area */}
+                        <div className="flex-1 overflow-y-auto p-8 space-y-8">
+                            
+                            {/* Dashboard Top Row */}
+                            <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+                                
+                                {/* Stock Detail & Chart */}
+                                <div className="xl:col-span-2 glass rounded-[2.5rem] p-8 space-y-6">
+                                    <div className="flex justify-between items-start">
+                                        <div className="flex items-center gap-5">
+                                            <div className="w-16 h-16 bg-slate-800 rounded-2xl flex items-center justify-center text-2xl font-black text-indigo-400">
+                                                {selectedStock.name[0]}
+                                            </div>
+                                            <div>
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <h2 className="text-2xl font-black">{selectedStock.name}</h2>
+                                                    <span className="text-xs font-bold text-slate-500 bg-slate-800 px-2 py-0.5 rounded-md">{selectedStock.code}</span>
+                                                </div>
+                                                <div className="flex items-center gap-3">
+                                                    <span className="text-3xl font-black tracking-tighter">{selectedStock.price.toLocaleString()}원</span>
+                                                    <span className={`text-sm font-bold px-2 py-1 rounded-lg ${selectedStock.change >= 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
+                                                        {selectedStock.change > 0 ? '▲' : '▼'} {Math.abs(selectedStock.change)}%
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <button 
+                                            onClick={() => toggleWatchlist(selectedStock)}
+                                            className={`p-3 rounded-2xl border transition-all ${watchlist.find(s => s.id === selectedStock.id) ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg' : 'border-slate-800 text-slate-500 hover:text-white hover:bg-slate-800'}`}
+                                        >
+                                            <Icon name="star" size={24} className={watchlist.find(s => s.id === selectedStock.id) ? 'fill-white' : ''} />
+                                        </button>
+                                    </div>
+
+                                    <div className="chart-container py-4">
+                                        <div className="flex gap-2 mb-6">
+                                            {['1D', '1W', '1M', '1Y', 'All'].map(t => (
+                                                <button key={t} className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${t === '1D' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 text-slate-500'}`}>{t}</button>
+                                            ))}
+                                        </div>
+                                        <StockChart symbol={selectedStock.code} />
+                                    </div>
+                                </div>
+
+                                {/* Side Panel: Insights & News */}
+                                <div className="space-y-8">
+                                    {/* Market Status Card */}
+                                    <div className="bg-gradient-to-br from-indigo-600 to-indigo-800 rounded-[2rem] p-6 text-white shadow-xl shadow-indigo-500/10 relative overflow-hidden">
+                                        <div className="relative z-10">
+                                            <h3 className="text-sm font-bold text-white/70 mb-4 flex items-center gap-2">
+                                                <Icon name="clock" size={14} /> 시장 현황 (After-hours)
+                                            </h3>
+                                            <div className="space-y-4">
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-xs font-medium text-white/60 text-indigo-100">시간외 단일가</span>
+                                                    <span className="text-sm font-black text-emerald-300">+0.85%</span>
+                                                </div>
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-xs font-medium text-white/60 text-indigo-100">야간 선물 지수</span>
+                                                    <span className="text-sm font-black text-rose-300">-0.21%</span>
+                                                </div>
+                                            </div>
+                                            <button className="w-full mt-6 bg-white/10 hover:bg-white/20 py-3 rounded-xl text-xs font-bold transition-all">상세 현황 보기</button>
+                                        </div>
+                                        <div className="absolute -right-4 -bottom-4 w-24 h-24 bg-white/10 rounded-full blur-2xl"></div>
+                                    </div>
+
+                                    {/* Real-time News */}
+                                    <div className="glass rounded-[2rem] p-6 flex flex-col gap-5">
+                                        <div className="flex justify-between items-center px-1">
+                                            <h3 className="text-sm font-bold flex items-center gap-2">
+                                                <Icon name="newspaper" size={16} className="text-indigo-400" /> 실시간 뉴스
+                                            </h3>
+                                            <button className="text-[10px] font-bold text-slate-500 hover:text-indigo-400">더보기</button>
+                                        </div>
+                                        <div className="space-y-6">
+                                            {NEWS_DATA.map(news => (
+                                                <div key={news.id} className="group cursor-pointer">
+                                                    <div className="flex justify-between items-center mb-1">
+                                                        <span className="text-[9px] font-bold text-indigo-400 uppercase tracking-tighter">{news.tag}</span>
+                                                        <span className="text-[9px] text-slate-500">{news.time}</span>
+                                                    </div>
+                                                    <p className="text-xs font-semibold leading-relaxed group-hover:text-indigo-400 transition-colors line-clamp-2">{news.title}</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Financial Board Section */}
+                            <div className="glass rounded-[2.5rem] p-8">
+                                <div className="flex justify-between items-center mb-8">
+                                    <div>
+                                        <h2 className="text-2xl font-black mb-1">재무 100선</h2>
+                                        <p className="text-xs text-slate-500 font-medium">시가총액 상위 100개 기업의 핵심 재무 지표를 실시간으로 비교 분석합니다.</p>
+                                    </div>
+                                    <div className="flex gap-3">
+                                        <button className="glass px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-slate-800 transition-all">
+                                            <Icon name="filter" size={14} /> 필터
+                                        </button>
+                                        <button className="bg-indigo-600 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all">
+                                            <Icon name="download" size={14} /> 데이터 추출
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-left">
+                                        <thead>
+                                            <tr className="border-b border-slate-800 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                                                <th className="pb-4 pl-2">순위</th>
+                                                <th className="pb-4">종목명</th>
+                                                <th className="pb-4">시가총액</th>
+                                                <th className="pb-4">현재가</th>
+                                                <th className="pb-4">등락률</th>
+                                                <th className="pb-4">PER</th>
+                                                <th className="pb-4">PBR</th>
+                                                <th className="pb-4">ROE</th>
+                                                <th className="pb-4 text-center">관심</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-800/50">
+                                            {filteredStocks.map((stock, idx) => (
+                                                <tr 
+                                                    key={stock.id} 
+                                                    className="group hover:bg-slate-800/30 transition-colors cursor-pointer"
+                                                    onClick={() => {
+                                                        setSelectedStock(stock);
+                                                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                                                    }}
+                                                >
+                                                    <td className="py-5 pl-2 text-sm font-bold text-slate-500">{idx + 1}</td>
+                                                    <td className="py-5">
+                                                        <div className="flex flex-col">
+                                                            <span className="text-sm font-bold group-hover:text-indigo-400 transition-colors">{stock.name}</span>
+                                                            <span className="text-[10px] text-slate-600">{stock.code}</span>
+                                                        </div>
+                                                    </td>
+                                                    <td className="py-5 text-sm font-medium">{stock.cap}</td>
+                                                    <td className="py-5 text-sm font-bold">{stock.price.toLocaleString()}</td>
+                                                    <td className={`py-5 text-sm font-black ${stock.change >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                        {stock.change > 0 ? '+' : ''}{stock.change}%
+                                                    </td>
+                                                    <td className="py-5 text-sm font-medium text-slate-300">{stock.per}배</td>
+                                                    <td className="py-5 text-sm font-medium text-slate-300">{stock.pbr}배</td>
+                                                    <td className="py-5 text-sm font-bold text-indigo-300">{stock.roe}%</td>
+                                                    <td className="py-5 text-center">
+                                                        <button 
+                                                            onClick={(e) => { e.stopPropagation(); toggleWatchlist(stock); }}
+                                                            className={`p-2 rounded-lg transition-colors ${watchlist.find(s => s.id === stock.id) ? 'text-amber-400' : 'text-slate-700 hover:text-slate-400'}`}
+                                                        >
+                                                            <Icon name="star" size={16} className={watchlist.find(s => s.id === stock.id) ? 'fill-amber-400' : ''} />
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </main>
+
+                    {/* Bottom Nav for Mobile */}
+                    <nav className="lg:hidden fixed bottom-0 w-full glass border-t border-slate-800 h-16 flex justify-around items-center px-4 z-50">
+                        <button className="flex flex-col items-center gap-1 text-indigo-500">
+                            <Icon name="layout-dashboard" size={20} />
+                            <span className="text-[10px] font-bold">홈</span>
+                        </button>
+                        <button className="flex flex-col items-center gap-1 text-slate-500">
+                            <Icon name="star" size={20} />
+                            <span className="text-[10px] font-bold">관심</span>
+                        </button>
+                        <button className="flex flex-col items-center gap-1 text-slate-500">
+                            <Icon name="bar-chart-2" size={20} />
+                            <span className="text-[10px] font-bold">통계</span>
+                        </button>
+                        <button className="flex flex-col items-center gap-1 text-slate-500">
+                            <Icon name="user" size={20} />
+                            <span className="text-[10px] font-bold">프로필</span>
+                        </button>
+                    </nav>
+
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
